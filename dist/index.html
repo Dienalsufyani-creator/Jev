@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jev — Dating Sim Systems Demo</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #f8fafc; min-height: 100vh; padding: 24px; display: flex; justify-content: center; }
+  .wrap { max-width: 860px; width: 100%; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 36px); }
+  p { color: #cbd5e1; line-height: 1.6; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+  .char { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
+  .char strong { display: block; font-size: 17px; }
+  .bar { height: 8px; background: #334155; border-radius: 999px; overflow: hidden; margin: 6px 0; }
+  .bar > div { height: 100%; background: #38bdf8; }
+  .bar.trust > div { background: #22c55e; }
+  small { color: #94a3b8; }
+  #dialogue { font-size: 18px; line-height: 1.6; background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin: 12px 0; }
+  #speaker { font-weight: 700; color: #7dd3fc; margin-bottom: 6px; }
+  button { background: #38bdf8; color: #082f49; border: 0; font-weight: 700; font-size: 15px; padding: 10px 14px; border-radius: 10px; cursor: pointer; margin: 4px 6px 4px 0; }
+  button.secondary { background: #334155; color: #e2e8f0; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:active { transform: translateY(1px); }
+  .choices { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+  .log { font-size: 13px; color: #94a3b8; max-height: 120px; overflow: auto; background: #020617; border-radius: 8px; padding: 8px 10px; }
+  .badge { display: inline-block; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; background: #22c55e; color: #052e16; font-weight: 700; padding: 4px 10px; border-radius: 999px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="badge" id="clock">Day 1 • Morning</div>
+    <h1>Jev — Dating Sim Demo</h1>
+    <p>Non-explicit systems demo. All characters are adults. Romance is opt-in, consensual, and fades to black. Build affection + trust over 3 days to unlock endings.</p>
+    <div class="row">
+      <button id="btnArt" type="button">Visit Art Fair (Alex, 28)</button>
+      <button id="btnCafe" type="button">Visit Café (Sam, 31)</button>
+      <button id="btnPark" type="button">Visit Park (Either)</button>
+      <button id="btnRest" type="button" class="secondary">Rest (advance time)</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnSave" type="button" class="secondary">Save</button>
+      <button id="btnLoad" type="button" class="secondary">Load</button>
+      <button id="btnReset" type="button" class="secondary">New Game</button>
+    </div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="card">
+    <div id="speaker">Narrator</div>
+    <div id="dialogue">Choose a location above to start a conversation.</div>
+    <div class="choices" id="choices"></div>
+    <h3 style="margin:16px 0 6px;font-size:14px;color:#94a3b8">Event log</h3>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+// ---------- Data: characters ----------
+const SLOTS = ["Morning", "Afternoon", "Evening"];
+const MAX_DAY = 3;
+
+function freshState() {
+  return {
+    day: 1,
+    slot: 0,
+    over: false,
+    chars: {
+      alex: { id: "alex", name: "Alex", age: 28, blurb: "painter", affection: 10, trust: 10, flags: [] },
+      sam: { id: "sam", name: "Sam", age: 31, blurb: "chef", affection: 10, trust: 10, flags: [] }
+    },
+    log: []
+  };
+}
+let S = freshState();
+
+// ---------- Data: dialogue graph (14 nodes) ----------
+// effects: {affection, trust, flag}, condition(char, state)
+const NODES = {
+  alex_1: {
+    speaker: "Alex", text: "Hey! Glad you made it to the fair. I'm showing three new landscapes today.",
+    choices: [
+      { text: "Your use of light is amazing.", fx: { affection: 8, trust: 2 }, next: "alex_2" },
+      { text: "What got you into painting?", fx: { trust: 6 }, next: "alex_3" },
+      { text: "Just browsing. [Leave]", next: null }
+    ]
+  },
+  alex_2: {
+    speaker: "Alex", text: "Thank you — that means a lot. I paint early mornings by the lake. Do you ever get up that early?",
+    choices: [
+      { text: "I'd love to see your routine sometime.", fx: { affection: 6, flag: "lake_invite" }, next: "alex_4" },
+      { text: "Not really, I'm a night owl.", fx: { trust: 2 }, next: "alex_4" }
+    ]
+  },
+  alex_3: {
+    speaker: "Alex", text: "My grandmother taught me. She said art is how we remember people. Sorry — that's a bit heavy for a first chat.",
+    choices: [
+      { text: "No, I appreciate you sharing that.", fx: { trust: 8, affection: 4 }, next: "alex_4" },
+      { text: "What's your favorite piece here?", fx: { affection: 4 }, next: "alex_2" }
+    ]
+  },
+  alex_4: {
+    speaker: "Alex", text: "I'm doing a small group sketch session tomorrow in the park. No pressure — want me to save you a spot?",
+    choices: [
+      { text: "Yes, save me a spot.", fx: { affection: 7, flag: "sketch_yes" }, next: null },
+      { text: "Maybe. I need to check my schedule.", fx: { trust: 3 }, next: null, ifFlag: "lake_invite" },
+      { text: "I can't, but good luck!", next: null }
+    ]
+  },
+  sam_1: {
+    speaker: "Sam", text: "Welcome to the café! We're testing a new autumn menu. Hungry for a free sample?",
+    choices: [
+      { text: "Yes please! What do you recommend?", fx: { affection: 7, trust: 2 }, next: "sam_2" },
+      { text: "How did you become a chef?", fx: { trust: 6 }, next: "sam_3" },
+      { text: "Just coffee today. [Leave]", next: null }
+    ]
+  },
+  sam_2: {
+    speaker: "Sam", text: "Try the roasted squash soup. My grandpa's recipe, with a twist. Tell me honestly what you think.",
+    choices: [
+      { text: "It's warm and comforting. I love it.", fx: { affection: 8 }, next: "sam_4" },
+      { text: "Good, but could use more salt — honest feedback.", fx: { trust: 7, affection: 2 }, next: "sam_4" }
+    ]
+  },
+  sam_3: {
+    speaker: "Sam", text: "I burned everything for two years in culinary school. Stick-to-it-iveness, plus great mentors. What do you do?",
+    choices: [
+      { text: "Share a bit about yourself.", fx: { trust: 8, affection: 3 }, next: "sam_4" },
+      { text: "I'd rather hear more about you.", fx: { trust: 4 }, next: "sam_2" }
+    ]
+  },
+  sam_4: {
+    speaker: "Sam", text: "I'm hosting a small tasting night for regulars. Would you like an invite? Totally casual, no pressure.",
+    choices: [
+      { text: "I'd love to come.", fx: { affection: 7, flag: "tasting_yes" }, next: null },
+      { text: "Maybe next time.", fx: { trust: 2 }, next: null }
+    ]
+  },
+  park_1: {
+    speaker: "Narrator", text: "The park is quiet. You see both Alex sketching and Sam on a lunch break. Who do you join?",
+    choices: [
+      { text: "Join Alex.", fx: { affection: 5 }, char: "alex", next: "park_alex" },
+      { text: "Join Sam.", fx: { affection: 5 }, char: "sam", next: "park_sam" },
+      { text: "Sit alone and read. [Restful, + perspective]", next: null }
+    ]
+  },
+  park_alex: {
+    speaker: "Alex", text: "Oh hey! You came. Mind if I sketch you reading? Only if you're comfortable — you can say no.",
+    choices: [
+      { text: "Sure, if I can see it after.", fx: { trust: 6, affection: 5 }, next: null },
+      { text: "I'd rather not today.", fx: { trust: 4 }, next: null }
+    ]
+  },
+  park_sam: {
+    speaker: "Sam", text: "Lunch break! I packed extra sandwiches. Want one? No strings, just too much food.",
+    choices: [
+      { text: "Thanks — let's chat.", fx: { affection: 6, trust: 3 }, next: null },
+      { text: "Thanks, but I need solo time.", fx: {}, next: null }
+    ]
+  },
+  finale_choice: {
+    speaker: "Narrator", text: "It's the last evening. Who do you want to spend the festival with? This is opt-in — you can also go solo.",
+    choices: [
+      { text: "Invite Alex.", next: "finale_alex" },
+      { text: "Invite Sam.", next: "finale_sam" },
+      { text: "Enjoy the festival solo.", next: "ending_solo" }
+    ]
+  },
+  finale_alex: {
+    speaker: "Alex", text: "I'd really like that. Just to be clear — only what you're comfortable with, always.",
+    choices: [
+      { text: "Walk the festival together, see where the evening goes. [Consensual, fade to black if romance]", next: "ending_alex" },
+      { text: "Actually, let's just stay friends.", next: "ending_solo" }
+    ]
+  },
+  finale_sam: {
+    speaker: "Sam", text: "I'd love to. Good company first — everything else only if we both want it.",
+    choices: [
+      { text: "Enjoy the tasting night together. [Consensual, fade to black if romance]", next: "ending_sam" },
+      { text: "Actually, let's just stay friends.", next: "ending_solo" }
+    ]
+  }
+};
+
+// ---------- Helpers ----------
+const $ = (id) => document.getElementById(id);
+
+function clamp(v) { return Math.max(0, Math.min(100, v)); }
+function getChar(id) { return S.chars[id]; }
+
+function log(msg) {
+  S.log.unshift(`D${S.day} ${SLOTS[S.slot]} — ${msg}`);
+  S.log = S.log.slice(0, 30);
+  renderLog();
+}
+function renderLog() {
+  $("log").innerHTML = S.log.map(x => `<div>${x}</div>`).join("") || "<div>No events yet.</div>";
+}
+
+function renderStats() {
+  const c = Object.values(S.chars).map(ch => `
+    <div class="char">
+      <strong>${ch.name}, ${ch.id === "alex" ? 28 : 31}</strong>
+      <small>${ch.blurb} • flags: ${ch.flags.length ? ch.flags.join(", ") : "none"}</small>
+      <div style="margin-top:8px"><small>Affection ${ch.affection}</small><div class="bar"><div style="width:${ch.affection}%"></div></div></div>
+      <div><small>Trust ${ch.trust}</small><div class="bar trust"><div style="width:${ch.trust}%"></div></div></div>
+    </div>`).join("");
+  $("stats").innerHTML = c;
+  $("clock").textContent = S.over ? `Finished • Day ${S.day}` : `Day ${S.day} • ${SLOTS[S.slot]}`;
+}
+
+function showNode(nodeId, charId) {
+  const n = NODES[nodeId];
+  if (!n) { endInteraction(); return; }
+  $("speaker").textContent = n.speaker;
+  $("dialogue").textContent = n.text;
+  const box = $("choices");
+  box.innerHTML = "";
+  // filter by condition / flag visibility (simple demo: hide second choice of alex_4 unless lake_invite)
+  n.choices.forEach(ch => {
+    if (ch.ifFlag) {
+      const c = getChar(charId);
+      if (!c.flags.includes(ch.ifFlag)) return;
+    }
+    const b = document.createElement("button");
+    b.textContent = ch.text;
+    b.onclick = () => {
+      const target = ch.char || charId;
+      if (ch.fx && target && getChar(target)) {
+        const t = getChar(target);
+        if (ch.fx.affection) t.affection = clamp(t.affection + ch.fx.affection);
+        if (ch.fx.trust) t.trust = clamp(t.trust + ch.fx.trust);
+        if (ch.fx.flag && !t.flags.includes(ch.fx.flag)) t.flags.push(ch.fx.flag);
+        log(`${t.name} ${ch.fx.affection ? `+${ch.fx.affection} affection ` : ""}${ch.fx.trust ? `+${ch.fx.trust} trust` : ""}`.trim());
+      }
+      renderStats();
+      if (ch.next && ch.next.startsWith("ending_")) showEnding(ch.next);
+      else if (ch.next) showNode(ch.next, target);
+      else endInteraction();
+    };
+    box.appendChild(b);
+  });
+}
+
+function advanceTime() {
+  if (S.over) return;
+  S.slot++;
+  if (S.slot >= SLOTS.length) {
+    S.slot = 0;
+    S.day++;
+  }
+  if (S.day > MAX_DAY) {
+    // go to finale choice instead of auto-ending
+    S.day = MAX_DAY;
+    S.slot = SLOTS.length - 1;
+    $("speaker").textContent = "Narrator";
+    showNode("finale_choice", null);
+    renderStats();
+    return;
+  }
+  renderStats();
+  $("speaker").textContent = "Narrator";
+  $("dialogue").textContent = `It's Day ${S.day}, ${SLOTS[S.slot]}. Choose where to go. (${MAX_DAY - S.day} days left)`;
+  $("choices").innerHTML = "";
+  updateButtons();
+}
+
+function endInteraction() {
+  renderStats();
+  $("choices").innerHTML = "";
+  if (!S.over) {
+    $("dialogue").textContent += " [Conversation ended — time passes.]";
+    setTimeout(advanceTime, 600);
+  }
+}
+
+function showEnding(id) {
+  S.over = true;
+  const a = S.chars.alex, s = S.chars.sam;
+  let text = "";
+  if (id === "ending_alex") {
+    const score = a.affection + a.trust;
+    text = score >= 80 && a.trust >= 35
+      ? `You and Alex walk the lantern festival together. You talk for hours. They spend the evening together. [fade to black — romance, consensual]. Ending: Artist's Muse (affection ${a.affection}, trust ${a.trust}).`
+      : `You and Alex have a nice evening, but decide to stay friends for now. Ending: Good Friends (Alex).`;
+  } else if (id === "ending_sam") {
+    const score = s.affection + s.trust;
+    text = score >= 80 && s.trust >= 35
+      ? `You join Sam's tasting night. Laughter, good food, long talk. They spend the evening together. [fade to black — romance, consensual]. Ending: Regular's Table (affection ${s.affection}, trust ${s.trust}).`
+      : `You enjoy Sam's food and company, and part as friends. Ending: Good Friends (Sam).`;
+  } else {
+    text = `You enjoy the festival solo, proud of the connections you made. Ending: Solo, Content. Alex ${a.affection}/${a.trust}, Sam ${s.affection}/${s.trust}.`;
+  }
+  $("speaker").textContent = "Ending";
+  $("dialogue").textContent = text;
+  $("choices").innerHTML = "";
+  log(text.slice(0, 80) + "…");
+  renderStats();
+  updateButtons();
+}
+
+function updateButtons() {
+  const dis = S.over;
+  ["btnArt", "btnCafe", "btnPark", "btnRest"].forEach(id => $(id).disabled = dis);
+}
+
+// ---------- Actions ----------
+$("btnArt").onclick = () => { log("Visited Art Fair."); showNode("alex_1", "alex"); };
+$("btnCafe").onclick = () => { log("Visited Café."); showNode("sam_1", "sam"); };
+$("btnPark").onclick = () => { log("Visited Park."); showNode("park_1", null); };
+$("btnRest").onclick = () => { log("Rested."); advanceTime(); };
+
+$("btnSave").onclick = () => {
+  try {
+    localStorage.setItem("jev_dating_save", JSON.stringify(S));
+    log("Game saved.");
+  } catch (e) { log("Save failed: storage unavailable."); }
+};
+$("btnLoad").onclick = () => {
+  try {
+    const raw = localStorage.getItem("jev_dating_save");
+    if (!raw) { log("No save found."); return; }
+    S = Object.assign(freshState(), JSON.parse(raw));
+    S.over = false;
+    // if save was at ending, keep over flag
+    if ($("speaker").textContent === "Ending") S.over = true;
+    renderStats(); renderLog();
+    $("dialogue").textContent = "Save loaded. Choose a location to continue.";
+    $("speaker").textContent = "Narrator";
+    $("choices").innerHTML = "";
+    updateButtons();
+    log("Save loaded.");
+  } catch (e) { log("Load failed."); }
+};
+$("btnReset").onclick = () => {
+  S = freshState();
+  renderStats(); renderLog();
+  $("speaker").textContent = "Narrator";
+  $("dialogue").textContent = "New game started. Choose a location above.";
+  $("choices").innerHTML = "";
+  updateButtons();
+};
+
+// init
+renderStats();
+renderLog();
+updateButtons();
+</script>
+</body>
+</html>
